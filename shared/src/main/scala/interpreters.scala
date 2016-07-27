@@ -49,8 +49,8 @@ trait FetchInterpreters {
       def apply[A](fa: FetchOp[A]): FetchInterpreter[M]#f[A] = {
         StateT[M, FetchEnv, A] { env: FetchEnv =>
           fa match {
-            case Thrown(e)  => M.raiseError(FetchException(e))
-            case Fetched(a) => M.pure((env, a))
+            case Errored(err) => M.raiseError(err)
+            case Fetched(a)   => M.pure((env, a))
             case one @ FetchOne(id, ds) => {
                 val startRound = System.nanoTime()
                 val cache      = env.cache

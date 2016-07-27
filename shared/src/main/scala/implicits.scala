@@ -16,32 +16,24 @@
 
 package fetch
 
-import cats.{Eval, MonadError}
+import cats.Monad
 import cats.std.FutureInstances
 import scala.concurrent.{Promise, Future, ExecutionContext}
 
 object implicits extends FutureInstances {
   implicit def fetchFutureFetchMonadError(
       implicit ec: ExecutionContext,
-      ME: MonadError[Future, Throwable]
+      M: Monad[Future]
   ): FetchMonadError[Future] = new FetchMonadError[Future] {
-    override def runQuery[A](j: Query[A]): Future[A] = j match {
-      case Sync(e) => ME.pureEval(e)
-      case Async(ac, timeout) => {
-          val p = Promise[A]()
+    override def runSync[A](q: Sync[A]): Future[A] = M.pureEval(q.action)
+    override def runAsync[A](q: Async[A]): Future[A] = {
+      val p = Promise[A]()
 
-          ec.execute(new Runnable {
-            def run() = ac(p.trySuccess _, p.tryFailure _)
-          })
+      ec.execute(new Runnable {
+        def run() = q.action(p.trySuccess _, p.tryFailure _)
+      })
 
-          p.future
-        }
-      case Ap(qf, qx) =>
-        runQuery(qf)
-          .zip(runQuery(qx))
-          .map({
-            case (f, x) => f(x)
-          })
+      p.future
     }
     def pure[A](x: A): Future[A] = Future.successful(x)
     def handleErrorWith[A](fa: Future[A])(f: FetchError => Future[A]): Future[A] =

@@ -26,31 +26,32 @@ import scala.concurrent.duration._
 
 object implicits {
   implicit val evalFetchMonadError: FetchMonadError[Eval] = new FetchMonadError[Eval] {
-    override def runQuery[A](j: Query[A]): Eval[A] = j match {
-      case Sync(e)    => e
-      case Ap(qf, qx) => ap(runQuery(qf))(runQuery(qx))
-      case Async(action, timeout) =>
-        Eval.later {
-          val latch = new java.util.concurrent.CountDownLatch(1)
-          @volatile var result: Xor[Throwable, A] = null
-          new Thread(
-              new Runnable {
-            def run() = {
-              action(a => {
-                result = Xor.Right(a);
-                latch.countDown
-              }, err => {
-                result = Xor.Left(err);
-                latch.countDown
-              })
-            }
-          }).start()
-          latch.await
-          result match {
-            case Xor.Left(err) => throw err
-            case Xor.Right(v)  => v
+    override def runSync[A](q: Sync[A]): Eval[A] = q.action
+    override def runAsync[A](q: Async[A]): Eval[A] = {
+      val action  = q.action
+      val timeout = q.timeout
+
+      Eval.later {
+        val latch = new java.util.concurrent.CountDownLatch(1)
+        @volatile var result: Xor[Throwable, A] = null
+        new Thread(
+            new Runnable {
+          def run() = {
+            action(a => {
+              result = Xor.Right(a);
+              latch.countDown
+            }, err => {
+              result = Xor.Left(err);
+              latch.countDown
+            })
           }
+        }).start()
+        latch.await
+        result match {
+          case Xor.Left(err) => throw err
+          case Xor.Right(v)  => v
         }
+      }
     }
     def pure[A](x: A): Eval[A] = Eval.now(x)
 
@@ -74,32 +75,34 @@ object implicits {
   }
 
   implicit val idFetchMonadError: FetchMonadError[Id] = new FetchMonadError[Id] {
-    override def runQuery[A](j: Query[A]): Id[A] = j match {
-      case Sync(e)    => e.value
-      case Ap(qf, qx) => ap(runQuery(qf))(runQuery(qx))
-      case Async(action, timeout) => {
-          val latch = new java.util.concurrent.CountDownLatch(1)
-          @volatile var result: Xor[Throwable, A] = null
-          new Thread(
-              new Runnable {
-            def run() = {
-              action(a => {
-                result = Xor.Right(a);
-                latch.countDown
-              }, err => {
-                result = Xor.Left(err);
-                latch.countDown
-              })
-            }
-          }).start()
-          latch.await
-          result match {
-            case Xor.Left(err) => throw err
-            case Xor.Right(v)  => v
-          }
+    override def runSync[A](q: Sync[A]): Id[A] = q.action.value
+    override def runAsync[A](q: Async[A]): Id[A] = {
+      val action = q.action
+      val latch  = new java.util.concurrent.CountDownLatch(1)
+
+      @volatile var result: Xor[Throwable, A] = null
+
+      new Thread(
+          new Runnable {
+        def run() = {
+          action(a => {
+            result = Xor.Right(a);
+            latch.countDown
+          }, err => {
+            result = Xor.Left(err);
+            latch.countDown
+          })
         }
+      }).start()
+      latch.await
+      result match {
+        case Xor.Left(err) => throw err
+        case Xor.Right(v)  => v
+      }
     }
+
     def pure[A](x: A): Id[A] = x
+
     def handleErrorWith[A](fa: Id[A])(f: FetchError => Id[A]): Id[A] =
       try {
         fa

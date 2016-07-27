@@ -56,30 +56,25 @@ object implicits {
     def flatMap[A, B](fa: Task[A])(f: A => Task[B]): Task[B] =
       fa.flatMap(f)
 
-    override def runQuery[A](q: Query[A]): Task[A] = q match {
-      case Sync(x) => evalToTask(x)
-      case Async(ac, timeout) => {
-          val task: Task[A] = Task.create(
-              (scheduler, callback) => {
+    override def runSync[A](q: Sync[A]): Task[A] = evalToTask(q.action)
+    override def runAsync[A](q: Async[A]): Task[A] = {
+      val task: Task[A] = Task.create(
+          (scheduler, callback) => {
 
-            scheduler.execute(new Runnable {
-              def run() = ac(callback.onSuccess, callback.onError)
-            })
+        scheduler.execute(new Runnable {
+          def run() = q.action(callback.onSuccess, callback.onError)
+        })
 
-            Cancelable.empty
-          })
+        Cancelable.empty
+      })
 
-          timeout match {
-            case finite: FiniteDuration => task.timeout(finite)
-            case _                      => task
-          }
-        }
-      case Ap(qf, qx) =>
-        Task
-          .zip2(runQuery(qf), runQuery(qx))
-          .map({
-            case (f, x) => f(x)
-          })
+      q.timeout match {
+        case finite: FiniteDuration => task.timeout(finite)
+        case _                      => task
+      }
     }
+
+    override def ap[A, B](qf: Task[A => B])(qx: Task[A]): Task[B] =
+      Task.mapBoth(qf, qx)(_ (_))
   }
 }

@@ -114,7 +114,7 @@ final case class Concurrent(as: List[FetchQuery[_, _]])
     as.forall(_.fullfilledBy(cache))
   }
 }
-final case class Thrown[A](err: Throwable) extends FetchOp[A]
+final case class Errored[A](e: FetchError) extends FetchOp[A]
 
 object `package` {
   type DataSourceName     = String
@@ -123,7 +123,14 @@ object `package` {
   type Fetch[A] = Free[FetchOp, A]
 
   trait FetchMonadError[M[_]] extends MonadError[M, FetchError] {
-    def runQuery[A](q: Query[A]): M[A]
+    def runQuery[A](q: Query[A]): M[A] = q match {
+      case sync @ Sync(_)      => runSync(sync)
+      case async @ Async(_, _) => runAsync(async)
+      case Ap(qf, qx)          => ap(runQuery(qf))(runQuery(qx))
+    }
+
+    def runSync[A](q: Sync[A]): M[A]
+    def runAsync[A](q: Async[A]): M[A]
   }
 
   object FetchMonadError {
@@ -150,10 +157,16 @@ object `package` {
       Free.pure(a)
 
     /**
+      * Lift a `FetchError` to the Fetch monad.
+      */
+    def error[A](e: FetchError): Fetch[A] =
+      Free.liftF(Errored(e))
+
+    /**
       * Lift an exception to the Fetch monad.
       */
     def error[A](e: Throwable): Fetch[A] =
-      Free.liftF(Thrown(e))
+      Free.liftF(Errored(FetchException(e)))
 
     /**
       * Given a value that has a related `DataSource` implementation, lift it
